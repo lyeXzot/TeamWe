@@ -1,8 +1,6 @@
 import json
-# import redis
 from tables import app
-from flask import request, render_template
-from util import test
+from flask import request
 from util import GetUserInfo, GetRate, GetFollows, GetResume, GetProject, GetChat, GetJoin, GetResponseJoin,\
     GetHistoryProject, GetProjectTheme, GetFollowers, GetSearchUsers, GetBrowseHistory, GetCountNewMsg,\
     GetBlack, GetShare, GetSearchShares, GetUserShares
@@ -25,7 +23,7 @@ def UploadImage(the_type):
         else:
             return json.dumps(result)
     else:
-        return json.dumps({"status": 500, "msg": '暂不支持头像以外图片的上传'})
+        return json.dumps({"status": 400, "msg": '暂不支持其他图片的上传'})
 
 
 # 登录
@@ -69,6 +67,29 @@ def modifyPasswd():
         return json.dumps({"status": error[0], "msg": error[1]})
     else:
         return ok_json
+
+
+# 上传简历/获取简历
+@app.route('/user/resume', methods=['GET', 'POST', 'PUT'])
+def resume():
+    if request.method == 'GET':
+        result, error = GetResume()
+        if error:
+            return json.dumps({"status": error[0], "msg": error[1]})
+        else:
+            return json.dumps(result)
+    if request.method == 'PUT':
+        error = ModifyResume()
+        if error:
+            return json.dumps({"status": error[0], "msg": error[1]})
+        else:
+            return ok_json
+    else:
+        error = DoResume()
+        if error:
+            return json.dumps({"status": error[0], "msg": error[1]})
+        else:
+            return ok_json
 
 
 # 添加评分，获得评分
@@ -128,6 +149,7 @@ def searchUser():
         return json.dumps(result)
 
 
+# 搜索分享
 @app.route('/share/search')
 def searchShare():
     result, error = GetSearchShares()
@@ -135,31 +157,6 @@ def searchShare():
         return json.dumps({"status": error[0], "msg": error[1]})
     else:
         return json.dumps(result)
-
-
-# 上传简历/获取简历
-@app.route('/user/resume', methods=['GET', 'POST', 'PUT'])
-def resume():
-    if request.method == 'GET':
-        # 获取简历
-        result, error = GetResume()
-        if error:
-            return json.dumps({"status": error[0], "msg": error[1]})
-        else:
-            return json.dumps(result)
-    if request.method == 'PUT':
-        error = ModifyResume()
-        if error:
-            return json.dumps({"status": error[0], "msg": error[1]})
-        else:
-            return ok_json
-    else:
-        # 上传简历
-        error = DoResume()
-        if error:
-            return json.dumps({"status": error[0], "msg": error[1]})
-        else:
-            return ok_json
 
 
 # 发私信/获取私信
@@ -179,7 +176,7 @@ def chat():
             return ok_json
 
 
-# 获得某个用户参加过的所有项目
+# 获得某个用户参加过的组队
 @app.route('/project/user')
 def historyProject():
     result, error = GetHistoryProject()
@@ -199,7 +196,7 @@ def historyUser():
         return json.dumps(result)
 
 
-# 获取发布/发布组队
+# 获取组队/发布组队
 @app.route('/project', methods=['GET', 'POST', 'DELETE'])
 def project():
     if request.method == 'GET':
@@ -224,7 +221,7 @@ def project():
             return ok_json
 
 
-# 结束项目
+# 结束组队
 @app.route('/project/finish', methods=['POST'])
 def overProject():
     error = DoFinishProject()
@@ -305,6 +302,7 @@ def isChecked():
         return ok_json
 
 
+# 获取、发布、删除分享
 @app.route('/share', methods=['GET', 'POST', 'DELETE'])
 def share():
     if request.method == 'GET':
@@ -327,6 +325,7 @@ def share():
             return ok_json
 
 
+# 获取用户所有分享
 @app.route('/share/user')
 def userShareAll():
     result, error = GetUserShares()

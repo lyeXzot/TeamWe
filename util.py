@@ -1,10 +1,11 @@
+import json
+import logging
 from hashlib import sha1 as _sha1
+from datetime import datetime, timedelta
+
 from tables import db, users, UsersInfo, Rating, Follow, ItemTeam, CV, Teammates, ProjectTheme, Chat, Message, \
     BlackList, Share
 from flask import request
-from datetime import datetime, date, timedelta
-import logging
-import json
 import redis
 
 r = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
@@ -14,6 +15,69 @@ _secret_key = 'secret'  # 计算token用
 
 #
 #
+def DoRegister():
+    """
+    进行注册
+    :return: 成功返回None,失败返回错误信息(错误码，描述)
+    """
+    data = request.form
+    try:
+        new_user = users(name=data['userID'],
+                         passwd=data['password'])
+
+        new_user_info = UsersInfo(avatar=data['avatar'],
+                                  nickname=data['nickname'],
+                                  gender=data['gender'],
+                                  description=data['description'],
+                                  school=data['school'],
+                                  schoolID=data['schoolID'],
+                                  major=data['major'],
+                                  grade=data['grade'],
+                                  interest=data['interest'])
+    except Exception as e:
+        return 400, "解析数据失败::%s" % e
+
+    t = users.query.filter(users.name == new_user.name).first()
+    if t:
+        return 400, "用户名已注册"
+
+    try:
+        db.session.add(new_user)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return 500, "服务器数据库提交出错::%s" % e
+
+    try:
+        new_user_info.uid = new_user.id
+        db.session.add(new_user_info)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        db.session.delete(new_user)
+        db.session.commit()
+        return 500, "服务器数据库提交::%s" % e
+
+    return None
+
+
+def DoLogin():
+    """
+    登录
+    :return: 成功返回(字典，None),失败返回(None,错误信息(错误码，描述))
+    """
+    try:
+        username = request.form['userID']
+        password = request.form['password']
+    except KeyError as e:
+        return None, (400, "服务器解析form出现KeyError")
+    token, uid = CheckPassword(username, password)
+    if token:
+        return {"status": 200, "msg": 'ok', "data": {"token": token, "userID": uid}}, None
+    else:
+        return None, (400, "密码错误/用户名不存在")
+
+
 def DoFollow():
     """
     执行关注操作
@@ -37,8 +101,7 @@ def DoFollow():
                 the_followee = UsersInfo.query.filter(UsersInfo.uid == int(befollowed)).first()
                 new_record = Follow(follower=uid,
                                     befollowed=the_followee.uid,
-                                    avatar=the_followee.avatar,
-                                    nickname=the_followee.nickname)
+                                    )
             except Exception as e:
                 return 500, "服务器创建对象时出错::%s" % e
 
@@ -111,9 +174,8 @@ def DoProjectTheme():
 
     if uid:
         try:
-            master = UsersInfo.query.filter(UsersInfo.uid == uid).first()
-
             dic = {"status": 200, "msg": 'ok'}
+            master = UsersInfo.query.filter(UsersInfo.uid == uid).first()
             new = ProjectTheme(publisher_id=uid,
                                publisherName=master.nickname,
                                publisherAvatar=master.avatar,
@@ -242,70 +304,6 @@ def DoRate():
         return None
     else:
         return 400, "token错误"
-
-
-def DoRegister():
-    """
-    进行注册
-    :return: 成功返回None,失败返回错误信息(错误码，描述)
-    """
-    data = request.form
-    try:
-        new_user = users(name=data['userID'],
-                         passwd=data['password'])
-
-        new_user_info = UsersInfo(avatar=data['avatar'],
-                                  nickname=data['nickname'],
-                                  gender=data['gender'],
-                                  description=data['description'],
-                                  school=data['school'],
-                                  schoolID=data['schoolID'],
-                                  major=data['major'],
-                                  grade=data['grade'],
-                                  interest=data['interest'])
-        data = str(data)
-    except Exception as e:
-        return 400, str(data)
-
-    t = users.query.filter(users.name == new_user.name).first()
-    if t:
-        return 400, "用户名已注册"
-
-    try:
-        db.session.add(new_user)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return 500, "服务器数据库故障::%s" % e
-
-    try:
-        new_user_info.uid = new_user.id
-        db.session.add(new_user_info)
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        db.session.delete(new_user)
-        db.session.commit()
-        return 500, "服务器数据库故障::%s" % e
-
-    return None
-
-
-def DoLogin():
-    """
-    登录
-    :return: 成功返回(字典，None),失败返回(None,错误信息(错误码，描述))
-    """
-    try:
-        username = request.form['userID']
-        password = request.form['password']
-    except KeyError as e:
-        return None, (400, "服务器解析form出现KeyError")
-    token, uid = CheckPassword(username, password)
-    if token:
-        return {"status": 200, "msg": 'ok', "data": {"token": token, "userID": uid}}, None
-    else:
-        return None, (400, "密码错误/用户名不存在")
 
 
 def DoResume():
@@ -681,15 +679,15 @@ def GetFollows():
     if uid is None:
         return None, (400, "获取userID失败")
 
-    all_follows = Follow.query.filter(Follow.follower == int(uid))
+    all_follows = Follow.query.join(UsersInfo, Follow.befollowed == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname, UsersInfo.description).filter(Follow.follower == int(uid))
     dic = {"status": 200, "msg": 'ok'}
     data = []
     for i in all_follows:
-        the_follower = UsersInfo.query.filter(UsersInfo.uid == i.befollowed).first()
-        data.append({"userID": the_follower.uid,
-                     "avatar": the_follower.avatar,
-                     "nickname": the_follower.nickname,
-                     "description": the_follower.description})
+        # the_follower = UsersInfo.query.filter(UsersInfo.uid == i.befollowed).first()
+        data.append({"userID": i[0].befollowed,
+                     "avatar": i.avatar,
+                     "nickname": i.nickname,
+                     "description": i.description})
     dic['data'] = data
     return dic, None
 
@@ -703,15 +701,15 @@ def GetFollowers():
     if uid is None:
         return None, (400, "获取userID失败")
 
-    all_follows = Follow.query.filter(Follow.befollowed == int(uid))
+    all_follows = Follow.query.join(UsersInfo, Follow.follower == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname, UsersInfo.description).filter(Follow.befollowed == int(uid))
     dic = {"status": 200, "msg": 'ok'}
     data = []
     for i in all_follows:
-        the_befollowed = UsersInfo.query.filter(UsersInfo.uid == i.follower).first()
-        data.append({"userID": the_befollowed.uid,
-                     "avatar": the_befollowed.avatar,
-                     "nickname": the_befollowed.nickname,
-                     "description": the_befollowed.description})
+        # the_befollowed = UsersInfo.query.filter(UsersInfo.uid == i.follower).first()
+        data.append({"userID": i[0].follower,
+                     "avatar": i.avatar,
+                     "nickname": i.nickname,
+                     "description": i.description})
     dic['data'] = data
     return dic, None
 
@@ -728,32 +726,32 @@ def GetShare():
     if the_id == 'all':
         try:
             data = []
-            all_shares = Share.query.order_by(Share.time.desc()).all()
+            all_shares = Share.query.join(UsersInfo, Share.uid == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname).order_by(Share.time.desc()).all()
             for i in all_shares:
-                publisher = UsersInfo.query.filter(UsersInfo.uid == i.uid).first()
-                data.append({"id": i.id,
-                             "publisher": publisher.uid,
-                             "publisherName": publisher.nickname,
-                             "publisherAvatar": publisher.avatar,
-                             "brief": i.brief,
-                             "categoty": i.category,
-                             "time": i.time.timestamp()})
+                # publisher = UsersInfo.query.filter(UsersInfo.uid == i.uid).first()
+                data.append({"id": i[0].id,
+                             "publisher": i[0].uid,
+                             "publisherName": i.nickname,
+                             "publisherAvatar": i.avatar,
+                             "brief": i[0].brief,
+                             "categoty": i[0].category,
+                             "time": i[0].time.timestamp()})
             dic['data'] = data
             return dic, None
         except Exception as e:
             return None, (500, "服务器错误::%s" % e)
     else:
         try:
-            the_share = Share.query.filter(Share.id == int(the_id)).first()
-            publisher = UsersInfo.query.filter(UsersInfo.uid == the_share.uid).first()
-            data = {"id": the_share.id,
-                    "publisher": publisher.uid,
-                    "publisherName": publisher.nickname,
-                    "publisherAvatar": publisher.avatar,
-                    "brief": the_share.brief,
-                    "content": the_share.content,
-                    "categoty": the_share.category,
-                    "time": the_share.time.timestamp()}
+            the_share = Share.query.join(UsersInfo, Share.uid == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname).filter(Share.id == int(the_id)).first()
+            # publisher = UsersInfo.query.filter(UsersInfo.uid == the_share.uid).first()
+            data = {"id": the_share[0].id,
+                    "publisher": the_share[0].uid,
+                    "publisherName": the_share.nickname,
+                    "publisherAvatar": the_share.avatar,
+                    "brief": the_share[0].brief,
+                    "content": the_share[0].content,
+                    "categoty": the_share[0].category,
+                    "time": the_share[0].time.timestamp()}
             dic['data'] = data
             return dic, None
         except Exception as e:
@@ -870,38 +868,38 @@ def GetProject():
 
             cache = r.get('project::' + pid)
             if cache is None:
-                the_project = ItemTeam.query.filter(ItemTeam.id == int(pid)).first()
+                the_project = ItemTeam.query.join(UsersInfo, ItemTeam.master_id == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname).filter(ItemTeam.id == int(pid)).first()
 
                 if the_project is None:
                     return None, (400, "查询不到该项目")
 
-                master = UsersInfo.query.filter(UsersInfo.uid == the_project.master_id).first()
+                # master = UsersInfo.query.filter(UsersInfo.uid == the_project.master_id).first()
 
-                types = the_project.types.split(';')
-                majors = the_project.req_major.split(';')
-                begin_date = str(the_project.begin_date).replace('-', '/')
+                types = the_project[0].types.split(';')
+                majors = the_project[0].req_major.split(';')
+                begin_date = str(the_project[0].begin_date).replace('-', '/')
 
-                user_in_team = Teammates.query.filter(Teammates.item_id == the_project.id).all()
+                user_in_team = Teammates.query.filter(Teammates.item_id == the_project[0].id).all()
                 members = []
                 for j in user_in_team:
                     members.append(j.uid)
 
-                data = {"id": the_project.id,
-                        "finished": the_project.finished,
-                        "publisher": master.uid,
-                        "publisherAvatar": master.avatar,
-                        "publisherName": master.nickname,
-                        "publishTime": the_project.publishTime.timestamp(),
-                        "title": the_project.title,
+                data = {"id": the_project[0].id,
+                        "finished": the_project[0].finished,
+                        "publisher": the_project[0].master_id,
+                        "publisherAvatar": the_project.avatar,
+                        "publisherName": the_project.nickname,
+                        "publishTime": the_project[0].publishTime.timestamp(),
+                        "title": the_project[0].title,
                         "type": types,
-                        "rank": the_project.rank,
+                        "rank": the_project[0].rank,
                         "major": majors,
-                        "period": the_project.period,
+                        "period": the_project[0].period,
                         "beginDate": begin_date,
-                        "description": the_project.describe,
-                        "memberNum": the_project.req_num,
-                        "grade": the_project.req_mate_grade,
-                        "skill": the_project.req_technique,
+                        "description": the_project[0].describe,
+                        "memberNum": the_project[0].req_num,
+                        "grade": the_project[0].req_mate_grade,
+                        "skill": the_project[0].req_technique,
                         "members": members,
                         }
                 dic['data'] = data
@@ -993,25 +991,25 @@ def GetJoin():
         try:
             dic = {"status": 200, "msg": 'ok'}
             data = []
-            all_msg = Message.query.filter(Message.master_id == uid, None == Message.state).all()
+            all_msg = Message.query.join(UsersInfo, Message.from_uid == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname).filter(Message.master_id == uid, None == Message.state).all()
             all_black = BlackList.query.filter(BlackList.rejecter == uid).all()
             black = []
             for i in all_black:
                 black.append(i.berejecter)
 
             for i in reversed(all_msg):
-                if i.from_uid in black:
+                if i[0].from_uid in black:
                     continue
-                from_user = UsersInfo.query.filter(UsersInfo.uid == i.from_uid).first()
-                data.append({"target": i.project_id,
-                             "message": i.message,
-                             "title": i.project_title,
-                             "from": from_user.uid,
-                             "fromAvatar": from_user.avatar,
-                             "fromName": from_user.nickname,
-                             "time": i.time.timestamp(),
-                             "id": i.id,
-                             "isChecked": i.isCheck_request
+                # from_user = UsersInfo.query.filter(UsersInfo.uid == i.from_uid).first()
+                data.append({"target": i[0].project_id,
+                             "message": i[0].message,
+                             "title": i[0].project_title,
+                             "from": i[0].from_uid,
+                             "fromAvatar": i.avatar,
+                             "fromName": i.nickname,
+                             "time": i[0].time.timestamp(),
+                             "id": i[0].id,
+                             "isChecked": i[0].isCheck_request
                              })
             dic['data'] = data
         except Exception as e:
@@ -1155,21 +1153,20 @@ def GetSearchShares():
     """
     key = request.args.get('keyword')
     if key is None:
-        return None, (400, "无法获得查询userID")
+        return None, (400, "无法获得查询keyword")
     try:
         dic = {"status": 200, "msg": 'ok'}
         data = []
-        all_shares = Share.query.all()
+        all_shares = Share.query.join(UsersInfo, Share.uid == UsersInfo.uid).add_columns(UsersInfo.avatar, UsersInfo.nickname).all()
         for i in reversed(all_shares):
-            if key in i.brief or key in i.category:
-                publisher = UsersInfo.query.filter(UsersInfo.uid == i.uid).first()
-                data.append({"id": i.id,
-                             "publisher": publisher.uid,
-                             "publisherName": publisher.nickname,
-                             "publisherAvatar": publisher.avatar,
-                             "brief": i.brief,
-                             "categoty": i.category,
-                             "time": i.time.timestamp()})
+            if key in i[0].brief or key in i[0].category:
+                data.append({"id": i[0].id,
+                             "publisher": i[0].uid,
+                             "publisherName": i.nickname,
+                             "publisherAvatar": i.avatar,
+                             "brief": i[0].brief,
+                             "categoty": i[0].category,
+                             "time": i[0].time.timestamp()})
         dic['data'] = data
         return dic, None
     except Exception as e:
@@ -1243,7 +1240,7 @@ def GetProjectTheme():
                     return cache, None
             else:
                 # 带limit的all
-                cache = r.get('ProjectTheme::all::'+limit)
+                cache = r.get('ProjectTheme::all::' + limit)
                 if cache is None:
                     data = []
                     all_theme = ProjectTheme.query.order_by(ProjectTheme.id.desc()).limit(int(limit)).all()
@@ -1256,7 +1253,7 @@ def GetProjectTheme():
                                      "cover": i.cover})
                     dic['data'] = data
                     final_data = json.dumps(dic)
-                    r.set('ProjectTheme::all::'+limit, final_data, ex=5)
+                    r.set('ProjectTheme::all::' + limit, final_data, ex=5)
                     return final_data, None
                 else:
                     return cache, None
@@ -1359,18 +1356,17 @@ def GetCountNewMsg():
             for i in all_black:
                 black.append(i.berejecter)
             num = 0
-            # 要考虑黑名单，不能更改已读未读防止解除拉黑，用不了count，这效率太低了/(ㄒoㄒ)/~~
-            num1 = Rating.query.filter(Rating.uid2 == uid, Rating.isChecked == False, Rating.uid1.notin_(black)).count()
+            num += Rating.query.filter(Rating.uid2 == uid, Rating.isChecked == False, Rating.uid1.notin_(black)).count()
 
-            num2 = Message.query.filter(Message.from_uid == uid, Message.isCheck_response == False,
+            num += Message.query.filter(Message.from_uid == uid, Message.isCheck_response == False,
                                         Message.master_id.notin_(black)).count()
 
-            num3 = Message.query.filter(Message.master_id == uid, Message.isCheck_request == False,
+            num += Message.query.filter(Message.master_id == uid, Message.isCheck_request == False,
                                         Message.from_uid.notin_(black)).count()
 
-            num4 = Chat.query.filter(Chat.to_uid == uid, Chat.isChecked == False, Chat.from_uid.notin_(black)).count()
+            num += Chat.query.filter(Chat.to_uid == uid, Chat.isChecked == False, Chat.from_uid.notin_(black)).count()
 
-            dic = {"status": 200, "msg": 'ok', "data": {"number": num1 + num2 + num3 + num4}}
+            dic = {"status": 200, "msg": 'ok', "data": {"number": num}}
         except Exception as e:
             return None, (500, "服务器错误::%s" % e)
         return dic, None
@@ -1509,6 +1505,7 @@ def DeleteProject():
             db.session.delete(the_project)
             db.session.commit()
         except Exception as e:
+            db.session.rollback()
             return 500, "服务器数据库提交失败::%s" % e
 
         return None
@@ -1537,6 +1534,7 @@ def DeleteShare():
             db.session.delete(the_share)
             db.session.commit()
         except Exception as e:
+            db.session.rollback()
             return 500, "服务器数据库提交失败::%s" % e
 
         return None
@@ -1545,6 +1543,7 @@ def DeleteShare():
         return 400, "token错误"
 
 
+# 工具函数
 def identify(token):
     """
     鉴别token
@@ -1614,11 +1613,3 @@ def sha1(string):
     a = _sha1()
     a.update(string.encode('utf-8'))
     return a.hexdigest()
-
-
-def test():
-    try:
-        print(None)
-        print(type(request.form['test']))
-    except Exception as e:
-        print(e)
